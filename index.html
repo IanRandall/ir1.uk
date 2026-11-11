@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Ian Randall</title>
+    <meta name="description" content="Ian Randall's mail domain. Not much else to see here. Stay a while and play if you like." />
+    <meta name="author" content="Ian Randall" />
+    <meta name="theme-color" content="#07070d" />
+    <meta name="color-scheme" content="dark" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Ian Randall" />
+    <meta property="og:description" content="Ian Randall's mail domain. Not much else to see here. Stay a while and play if you like." />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Ian Randall" />
+    <meta name="twitter:description" content="Ian Randall's mail domain. Not much else to see here. Stay a while and play if you like." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2307070d'/%3E%3Ccircle cx='32' cy='32' r='19' fill='none' stroke='%23f4f1ea' stroke-width='5' stroke-dasharray='6 4'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <canvas id="bg" aria-hidden="true"></canvas>
+    <canvas id="fg" aria-hidden="true"></canvas>
+
+    <main class="sr-only">
+      <h1>Ian Randall</h1>
+      <p>Ian Randall's mail domain. Not much else to see here. Stay a while and play if you like</p>
+      <p>The text is drawn around a squishy balloon you can drag, squash against the edges of the screen, fling, and pop. Arrow keys nudge it. Double-tap it, or press H, for a small air-hockey game.</p>
+    </main>
+    <noscript><p class="noscript">Ian Randall's mail domain. Not much else to see here. Stay a while and play if you like</p></noscript>
+
+    <div class="goal" aria-hidden="true"></div>
+    <div class="hud" aria-live="polite" hidden>
+      <span class="hud-timer">:15</span>
+      <span class="hud-score">0</span>
+    </div>
+    <div class="burst" aria-hidden="true">+1</div>
+    <p class="hint" aria-hidden="true">fling it up into the goal</p>
+
+    <section class="endcard" role="dialog" aria-modal="true" aria-labelledby="end-title" hidden>
+      <div class="panel">
+        <h2 id="end-title"><span class="final-score">0</span> <span class="final-label">goals</span></h2>
+        <p class="sub">in 15 seconds</p>
+        <div class="board">
+          <div class="board-head"><h3>leaderboard</h3><span>goals</span></div>
+          <ol class="board-list"></ol>
+          <div class="board-form" hidden>
+            <label id="initials-label">sign with your initials</label>
+            <div class="initials-row">
+              <div class="initials" role="group" aria-labelledby="initials-label">
+                <input aria-label="First initial" inputmode="text" autocapitalize="characters" autocorrect="off" spellcheck="false" />
+                <input aria-label="Second initial" inputmode="text" autocapitalize="characters" autocorrect="off" spellcheck="false" />
+                <input aria-label="Third initial" inputmode="text" autocapitalize="characters" autocorrect="off" spellcheck="false" />
+              </div>
+              <button type="button" class="save">save</button>
+            </div>
+          </div>
+          <p class="board-status" role="status" aria-live="polite"></p>
+        </div>
+        <div class="actions">
+          <button type="button" class="replay">play again</button>
+          <button type="button" class="done">done</button>
+        </div>
+      </div>
+    </section>
+
+    <script src="script.js"></script>
+  </body>
+</html>
