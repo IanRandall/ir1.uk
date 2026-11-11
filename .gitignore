@@ -1,0 +1,18 @@
+# build outputs
+dist/
+ian-randall-preview.html
+*.zip
+
+# runtime score data (wherever scores.php decides to write it)
+scores.json.php
+scores.json.php.*.tmp
+ratelimit.json.php
+ratelimit.json.php.*.tmp
+scores.lock
+ian-randall-scores/
+
+# test screenshots
+shots/
+
+__pycache__/
+.DS_Store
