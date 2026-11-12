@@ -28,7 +28,7 @@ Upload
      It should say "saved to the global board".
 
 Notes
-  - Saves are limited to 5 per minute per visitor, initials are 1-3 letters, scores 1-24.
+  - Saves are limited to 5 per minute per visitor, initials are 1-3 letters, scores 1-150.
   - Each round asks the server for a token when the clock starts, and the save sends it back.
     A score with no token, a reused token, or a score saved before the round could have
     finished is refused. The message under the leaderboard says why.

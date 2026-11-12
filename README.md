@@ -8,7 +8,7 @@ Live at [https://ir1.uk](https://ir1.uk).
 
 Drag the balloon and let go to fling it. It bounces off the edges, and every few bounces the colours change. Squash it into a wall and hold it there, or press **P**, and it pops into letter particles. Click, or press Enter or Space, and it pulls itself back together. The arrow keys nudge it.
 
-Double-tap the balloon, or press **H**, to play air hockey. Fling it up into the goal. You have 15 seconds. After each goal the puck sits for 0.8 seconds, visibly resetting, and can't be hit; the clock keeps running, so a fast phone swipe and a mouse fling end up in the same range. At the end, sign the leaderboard with one to three initials. On the live site that board is shared; if the score server cannot be reached, the score is kept on that device and the page says so.
+Double-tap the balloon, or press **H**, to play air hockey. Fling it up into the goal. You have 15 seconds. At the end, sign the leaderboard with one to three initials. On the live site that board is shared; if the score server cannot be reached, the score is kept on that device and the page says so.
 
 ## Layout
 
@@ -60,11 +60,9 @@ If the page cannot fetch a token (the `file://` preview, or the server is down),
 Protections:
 
 - Same-origin only. There is no `Access-Control-Allow-Origin` header. If `Origin` is sent, its host must match `Host`. If `Sec-Fetch-Site` is sent, it must be `same-origin` or `none`. The body must be `Content-Type: application/json` and at most 512 bytes.
-- Initials are 1–3 letters, checked against a small block list. Scores are integers from 1 to 24.
+- Initials are 1–3 letters, checked against a small block list. Scores are integers from 1 to 150.
 - A save without the round token, or with a token that is altered, unknown, expired (10 minutes), or already used, is rejected. Used nonces are kept in `used.json.php` and pruned once they expire.
 - A save earlier than 13 seconds after the token was issued is rejected. A round lasts 15 seconds; the 2 second gap covers the token request overlapping the start of the clock.
-- The score has to be possible in the time since the token was issued. The puck is dead for 0.8 seconds after each goal, so the server allows at most `1 + floor(elapsed / 0.8s)` goals. Posting 24 at the 13 second mark is refused. A real round is not: with that pause, even instant flings only reach `1 + floor(15 / 0.8) = 19`, and a real fling is slower, so fast rounds land nearer 15.
-- 24 is the hard ceiling. It sits just above that pause-only maximum of 19, so a fair round still saves, and it replaces the old cap of 150 (that one assumed the puck respawned instantly, which is how phones were scoring about 60). Waiting on an unused token stretches the elapsed-time check, so the ceiling is what stops those saves.
 - Five saves per IP address per minute, and twelve round-starts. The address is stored only as a short hash, for the rate limit. A save that is rejected for the token or the score does not use up a save.
 - `flock` covers the score file, the rate-limit file, and the used-token file. Each write goes to a temporary file and is renamed into place. The files (`scores.json.php`, `ratelimit.json.php`, `secret.json.php`, `used.json.php`) start with `<?php exit;` so they are not readable as data even where `.htaccess` is ignored.
 

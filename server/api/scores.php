@@ -23,16 +23,11 @@
 const SCORES_DIR = '';
 const TOP_KEEP   = 100;   // entries kept on disk
 const TOP_SHOW   = 20;    // entries returned
-// 0.8s pause after each goal (GOAL_PAUSE in script.js). Instant flings would
-// still only reach 1 + floor(15 / 0.8) = 19 goals, and a real fling is slower,
-// so fast rounds land nearer 15. 24 sits just above that pause-only ceiling.
-// The old cap of 150 assumed the puck respawned instantly (phones scored ~60).
-const MAX_SCORE  = 24;
+const MAX_SCORE  = 150;   // generous ceiling for a 15 second round; the puck respawns instantly, so fast swipers on mobile score a lot
 const MAX_BODY   = 512;   // bytes
 const RATE_MAX   = 5;     // saves allowed per IP ...
 const TOKEN_MAX  = 12;    // round-starts allowed per IP ...
 const RATE_WINDOW = 60;   // ... per this many seconds
-const GOAL_PAUSE_MS  = 800;    // must match GOAL_PAUSE in script.js
 const ROUND_MS       = 15000;
 const EARLY_SLACK_MS = 2000;   // token fetch overlaps the start of the client clock
 const MIN_ELAPSED_MS = 13000;  // ROUND_MS - EARLY_SLACK_MS
@@ -193,12 +188,6 @@ function load_used($dir, $now) {
     }
     return $out;
 }
-// First goal needs no pause. Every goal after that costs one post-goal pause.
-// No minimum flight time on top: the pause alone is the bound, which is generous.
-function max_plausible($elapsed) {
-    if ($elapsed < 0) return 0;
-    return 1 + intdiv((int)$elapsed, GOAL_PAUSE_MS);
-}
 function prune_rate($rate, $nowSec) {
     foreach ($rate as $k => $times) {
         $keep = [];
@@ -291,7 +280,6 @@ $used = load_used($dir, $now);
 if (isset($used[$parts['nonce']])) give_up($lock, 409, 'that round was already saved');
 $elapsed = $now - $parts['iat'];
 if ($elapsed < MIN_ELAPSED_MS) give_up($lock, 422, 'round still in progress, try again in a moment');
-if ($score > max_plausible($elapsed)) give_up($lock, 422, 'that score is too high for the time played');
 
 // rate limit (per hashed IP, sliding window) — only once the round itself is acceptable
 $nowSec = time();
