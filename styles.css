@@ -26,6 +26,7 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 }
 .goal.on { transform: translateX(-50%) scaleX(1); opacity: .9; }
 .goal.pulse { animation: goalpulse .6s ease-out; }
+.goal.resetting { box-shadow: 0 0 32px 6px color-mix(in srgb, var(--ink) 60%, transparent); }
 @keyframes goalpulse { 0% { box-shadow: 0 0 60px 18px var(--ink); } 100% { box-shadow: 0 0 24px 2px transparent; } }
 
 .hud {

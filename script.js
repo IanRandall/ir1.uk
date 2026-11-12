@@ -327,6 +327,7 @@ gl_FragColor=vec4(c,1.);}`;
   /* ------------------------------------------------------------------ physics */
   const K_WALL = 1050, C_WALL = 9.5;
   function stepFree(dt) {
+    if (hockey.on && hockey.hold > 0) { ball.vx = ball.vy = 0; return; }
     const R = ball.R;
     const fr = hockey.on ? 0.3 : 0.6;
     let ax = 0, ay = 0;
@@ -369,6 +370,7 @@ gl_FragColor=vec4(c,1.);}`;
   }
 
   function stepDrag(dt) {
+    if (hockey.on && hockey.hold > 0) { ball.vx = ball.vy = 0; return; }
     const R = ball.R;
     const tx = drag.px + drag.ox, ty = drag.py + drag.oy;
     const lim = R * MIN_RATIO;
@@ -625,6 +627,18 @@ gl_FragColor=vec4(c,1.);}`;
       const size = layout.length ? layout[0].size : 16;
       ctx.font = `500 ${size.toFixed(2)}px ${FONT_STACK}`;
       for (const L of layout) drawChar(L.ch, L.x, L.y, L.a, size);
+      // dashed ring while the puck is dead after a goal: it shrinks away as the pause ends
+      if (hockey.on && hockey.hold > 0) {
+        const k = clamp(hockey.hold / GOAL_PAUSE, 0, 1);
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, ball.R * (1.08 + 0.38 * k), 0, TAU);
+        ctx.strokeStyle = inkCss(0.14 + 0.4 * k);
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 7]);
+        ctx.stroke();
+        ctx.restore();
+      }
     } else {
       for (const s of shreds) {
         ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(s.a);
@@ -647,7 +661,12 @@ gl_FragColor=vec4(c,1.);}`;
   }
 
   /* ------------------------------------------------------------------ air hockey */
-  const hockey = { on: false, gx0: 0, gx1: 0, running: false, over: false, timeLeft: 15, score: 0, started: false };
+  // Seconds the puck is dead after a goal. scores.php GOAL_PAUSE_MS must stay in step (800).
+  // Long enough for the "+1" burst (0.8s) to fade before the puck can be hit again.
+  const GOAL_PAUSE = 0.8;
+  const hockey = { on: false, gx0: 0, gx1: 0, running: false, over: false, timeLeft: 15, score: 0, started: false, hold: 0 };
+  // Round token from api/scores.php. Idle until the clock starts; "local" when there is no server.
+  let ticketGen = 0, roundTicket = null, ticketPromise = null, ticketState = "idle";
   const BOARD_KEY = "ianrandall.hockey.v1";
   function updateGoalGeometry() {
     const rh = ball.baseR * 0.55;
@@ -657,12 +676,14 @@ gl_FragColor=vec4(c,1.);}`;
   }
   function enterHockey() {
     if (state !== "ball") return;
-    hockey.on = true; hockey.running = false; hockey.over = false; hockey.started = false; hockey.timeLeft = 15; hockey.score = 0;
+    hockey.on = true; hockey.running = false; hockey.over = false; hockey.started = false; hockey.timeLeft = 15; hockey.score = 0; hockey.hold = 0;
+    clearTicket();
     cancelDrag(); closeEndCard();
     ball.targetR = ball.baseR * 0.55;
     // start clear of the bottom wall while it is still full size, or the wall spring launches it into the goal
     ball.x = W / 2; ball.y = Math.max(H * 0.5, Math.min(H * 0.75, H - ball.R - fontSize() * 0.6 - 4)); ball.vx = ball.vy = 0;
     updateGoalGeometry();
+    goalEl.classList.remove("pulse", "resetting");
     goalEl.classList.add("on"); hudEl.hidden = false; hintEl.classList.add("show");
     renderHud(); Sound.blip(700);
   }
@@ -680,10 +701,11 @@ gl_FragColor=vec4(c,1.);}`;
   function exitHockey() {
     // Reset all round state: leaving `over` set blocked every later grab (see pointerdown).
     hockey.on = false; hockey.running = false; hockey.over = false; hockey.started = false;
-    hockey.timeLeft = 15; hockey.score = 0;
+    hockey.timeLeft = 15; hockey.score = 0; hockey.hold = 0;
+    clearTicket();
     cancelDrag();
     ball.targetR = ball.baseR;
-    goalEl.classList.remove("on"); hudEl.hidden = true; hintEl.classList.remove("show");
+    goalEl.classList.remove("on", "pulse", "resetting"); hudEl.hidden = true; hintEl.classList.remove("show");
     closeEndCard();
     ball.vx = 0; ball.vy = -300;
     Sound.blip(420);
@@ -694,23 +716,34 @@ gl_FragColor=vec4(c,1.);}`;
     timerEl.classList.toggle("low", hockey.running && s <= 5);
     scoreEl.textContent = String(hockey.score);
   }
+  function pinPuck(spring) {
+    ball.x = W / 2; ball.y = H * 0.78; ball.vx = ball.vy = 0; ball.ax = ball.ay = 0;
+    if (spring) for (let i = 0; i < N; i++) { ball.r[i] = ball.R * 0.6; ball.rv[i] = ball.R * 3; }
+  }
   function stepHockey(dt) {
     if (!hockey.on) return;
     if (hockey.running) {
-      hockey.timeLeft -= dt;
+      hockey.timeLeft -= dt; // the post-goal pause does not stop the clock
       if (hockey.timeLeft <= 0) { hockey.timeLeft = 0; endRound(); }
       renderHud();
+    }
+    if (hockey.hold > 0) {
+      hockey.hold = Math.max(0, hockey.hold - dt);
+      pinPuck(false);
+      if (hockey.hold === 0) goalEl.classList.remove("resetting");
+      return;
     }
     if (ball.y < -ball.R) {
       if (hockey.running) {
         hockey.score++; renderHud();
+        hockey.hold = GOAL_PAUSE;
+        cancelDrag();
+        pinPuck(true);
         burstEl.classList.remove("show"); void burstEl.offsetWidth; burstEl.classList.add("show");
-        goalEl.classList.remove("pulse"); void goalEl.offsetWidth; goalEl.classList.add("pulse");
+        goalEl.classList.remove("pulse", "resetting"); void goalEl.offsetWidth; goalEl.classList.add("pulse", "resetting");
         Sound.goal();
         try { navigator.vibrate?.(15); } catch {}
-      }
-      ball.x = W / 2; ball.y = H * 0.78; ball.vx = 0; ball.vy = 0;
-      for (let i = 0; i < N; i++) { ball.r[i] = ball.R * 0.6; ball.rv[i] = ball.R * 3; }
+      } else pinPuck(true);
     }
   }
   // localStorage can be missing or throw (file:// in some browsers, private mode, storage full),
@@ -747,6 +780,31 @@ gl_FragColor=vec4(c,1.);}`;
   let globalList = null;
   let highlight = null;        // {id} for a global entry, {d} for a local one
   let roundToken = 0;
+  function clearTicket() {
+    ticketGen++;
+    roundTicket = null;
+    ticketPromise = null;
+    ticketState = "idle";
+  }
+  // Asked for when the clock starts. A failed fetch leaves the on-device board working.
+  function requestTicket() {
+    const my = ++ticketGen;
+    roundTicket = null;
+    ticketState = "pending";
+    if (!apiPossible) { ticketState = "local"; ticketPromise = null; return; }
+    ticketPromise = api("POST", { start: true }).then((r) => {
+      if (my !== ticketGen) return;
+      if (r && r.data && r.data.ok && typeof r.data.token === "string") {
+        roundTicket = r.data.token;
+        ticketState = "ok";
+      } else {
+        roundTicket = null;
+        ticketState = "fail";
+      }
+    }).catch(() => {
+      if (my === ticketGen) { roundTicket = null; ticketState = "fail"; }
+    });
+  }
   async function api(method, body) {
     if (!apiPossible) throw new Error("no server");
     const ctl = typeof AbortController === "function" ? new AbortController() : null;
@@ -761,7 +819,9 @@ gl_FragColor=vec4(c,1.);}`;
       let data = null;
       try { data = await res.json(); } catch {}
       // a host without PHP returns 404 HTML or the raw source: treat as unreachable
-      if (!data || typeof data !== "object" || (data.ok !== false && !Array.isArray(data.scores))) throw new Error("bad response");
+      if (!data || typeof data !== "object") throw new Error("bad response");
+      const known = data.ok === false || Array.isArray(data.scores) || typeof data.token === "string";
+      if (!known) throw new Error("bad response");
       return { status: res.status, data };
     } finally { clearTimeout(timer); }
   }
@@ -882,13 +942,21 @@ gl_FragColor=vec4(c,1.);}`;
       return;
     }
     const score = hockey.score;
+    const gen = ticketGen;
     let fellBack = false;
     if (boardMode === "global") {
       saving = true; saveBtn.disabled = true; setStatus("saving…");
       let r = null;
-      try { r = await api("POST", { initials: ini, score }); } catch {}
+      let noTicket = false;
+      try {
+        if (ticketPromise) await ticketPromise;
+        if (gen !== ticketGen || endEl.hidden) { saving = false; saveBtn.disabled = false; return; }
+        if (!roundTicket) noTicket = true;
+        else r = await api("POST", { initials: ini, score, token: roundTicket });
+      } catch {}
+      if (gen !== ticketGen || endEl.hidden) { saving = false; saveBtn.disabled = false; return; }
       saving = false; saveBtn.disabled = false;
-      if (r && r.data.ok && r.data.entry && Array.isArray(r.data.scores)) {
+      if (!noTicket && r && r.data.ok && r.data.entry && Array.isArray(r.data.scores)) {
         globalList = cleanGlobal(r.data.scores);
         const entry = r.data.entry;
         highlight = { id: String(entry.id) };
@@ -899,13 +967,13 @@ gl_FragColor=vec4(c,1.);}`;
         Sound.blip(880);
         return;
       }
-      if (r && (r.status === 422 || r.status === 429 || r.status === 413) && r.data && r.data.error) {
-        // the server answered but said no (bad initials, rate limit...): say why, let them try again
+      if (!noTicket && r && r.status >= 400 && r.status < 500 && r.data && r.data.error) {
+        // the server answered but said no (bad initials, rate limit, round token...): say why, let them try again
         setStatus(String(r.data.error), "error");
         if (r.status === 422) initialInputs[0].focus();
         return;
       }
-      boardMode = "local"; fellBack = true; // unreachable or server error
+      boardMode = "local"; fellBack = true; // no token, unreachable, or a server error
     }
     const { persisted, entry } = saveLocal(ini, score);
     boardForm.hidden = true;
@@ -936,7 +1004,7 @@ gl_FragColor=vec4(c,1.);}`;
   }
   fg.addEventListener("pointerdown", (e) => {
     if (state === "popped") { if (now() - popT > 0.5) reform(); return; }
-    if (state !== "ball" || hockey.over) return;
+    if (state !== "ball" || hockey.over || (hockey.on && hockey.hold > 0)) return;
     if (!insideBall(e.clientX, e.clientY)) return;
     e.preventDefault();
     fg.setPointerCapture?.(e.pointerId);
@@ -958,7 +1026,7 @@ gl_FragColor=vec4(c,1.);}`;
       drag.moved = Math.max(drag.moved, Math.hypot(e.clientX - drag.downX, e.clientY - drag.downY));
       while (drag.hist.length > 3 && now() - drag.hist[0].t > 0.25) drag.hist.shift();
     } else {
-      fg.classList.toggle("can-grab", insideBall(e.clientX, e.clientY));
+      fg.classList.toggle("can-grab", !(hockey.on && hockey.hold > 0) && insideBall(e.clientX, e.clientY));
     }
   });
   function release(e) {
@@ -978,7 +1046,10 @@ gl_FragColor=vec4(c,1.);}`;
     if (sp > maxV) { vx *= maxV / sp; vy *= maxV / sp; }
     ball.vx = vx; ball.vy = vy;
     ball.popCharge = 0;
-    if (hockey.on && !hockey.running && !hockey.over && sp > 150) { hockey.running = true; hockey.started = true; hintEl.classList.remove("show"); }
+    if (hockey.on && !hockey.running && !hockey.over && sp > 150) {
+      hockey.running = true; hockey.started = true; hintEl.classList.remove("show");
+      requestTicket();
+    }
     // double-tap toggles the mini-game
     const isTap = tNow - drag.downT < 0.28 && drag.moved < 12;
     if (isTap) {
@@ -997,8 +1068,9 @@ gl_FragColor=vec4(c,1.);}`;
     const imp = 900;
     if (state === "popped" && (e.key === "Enter" || e.key === " ")) { reform(); e.preventDefault(); return; }
     if (state !== "ball") return;
+    if (hockey.on && hockey.hold > 0 && e.key.slice(0, 5) === "Arrow") { e.preventDefault(); return; }
     if (e.key === "ArrowLeft") ball.vx -= imp; else if (e.key === "ArrowRight") ball.vx += imp;
-    else if (e.key === "ArrowUp") { ball.vy -= imp; if (hockey.on && !hockey.running && !hockey.over) hockey.running = true; }
+    else if (e.key === "ArrowUp") { ball.vy -= imp; if (hockey.on && !hockey.running && !hockey.over) { hockey.running = true; requestTicket(); } }
     else if (e.key === "ArrowDown") ball.vy += imp;
     else if (e.key === "h" || e.key === "H") { hockey.on ? exitHockey() : enterHockey(); }
     else if (e.key === "p" || e.key === "P") { if (!hockey.on) pop(); }
@@ -1055,5 +1127,11 @@ gl_FragColor=vec4(c,1.);}`;
   requestAnimationFrame(frame);
 
   // small read-only hook for automated testing
-  window.__balloon = { get state() { return state; }, ball, hockey, get dragOn() { return drag.on; }, get theme() { return themeIndex; }, pop, reform, enterHockey, exitHockey, hasGL };
+  window.__balloon = {
+    get state() { return state; }, ball, hockey,
+    get dragOn() { return drag.on; }, get theme() { return themeIndex; },
+    get ticket() { return roundTicket; }, get ticketState() { return ticketState; },
+    goalPause: GOAL_PAUSE,
+    pop, reform, enterHockey, exitHockey, hasGL,
+  };
 })();

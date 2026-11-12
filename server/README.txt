@@ -28,11 +28,16 @@ Upload
      It should say "saved to the global board".
 
 Notes
-  - Saves are limited to 5 per minute per visitor, initials are 1-3 letters, scores 1-150.
+  - Saves are limited to 5 per minute per visitor, initials are 1-3 letters, scores 1-24.
+  - Each round asks the server for a token when the clock starts, and the save sends it back.
+    A score with no token, a reused token, or a score saved before the round could have
+    finished is refused. The message under the leaderboard says why.
   - Only pages on your own domain can save scores (no cross-site access).
   - If the server can't be reached, the page still works and keeps scores on that device,
     and the message under the leaderboard says so.
-  - Score files are scores.json.php, ratelimit.json.php and scores.lock. To reset the board,
-    delete scores.json.php. Visitor IPs are only stored hashed, for the rate limit.
+  - Score files are scores.json.php, ratelimit.json.php, used.json.php, secret.json.php
+    and scores.lock. secret.json.php is created for you; leave it there.
+    To reset the board, delete scores.json.php (leave the secret). Visitor IPs are only
+    stored hashed, for the rate limit.
   - On nginx, .htaccess is ignored, but the score files start with "<?php exit;" so they
     can't be read through the web anyway.

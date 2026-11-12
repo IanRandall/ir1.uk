@@ -8,6 +8,10 @@ scores.json.php
 scores.json.php.*.tmp
 ratelimit.json.php
 ratelimit.json.php.*.tmp
+secret.json.php
+secret.json.php.*.tmp
+used.json.php
+used.json.php.*.tmp
 scores.lock
 ian-randall-scores/
 
