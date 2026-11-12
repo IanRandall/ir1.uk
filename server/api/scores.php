@@ -1,10 +1,18 @@
 <?php
 /**
  * Global air-hockey leaderboard for Ian Randall's site.
- *   GET  api/scores.php                         -> {"ok":true,"scores":[{id,i,s,t},...]}   (top 20)
- *   POST api/scores.php  {"initials":"IAN","score":7}
- *                                               -> {"ok":true,"scores":[...],"entry":{id,i,s,t,rank}}
- * No database: a JSON file guarded by flock(). Works on PHP 7.4+.
+ *   GET  api/scores.php
+ *        -> {"ok":true,"scores":[{id,i,s,t},...]}                          (top 20)
+ *   POST api/scores.php  {"start":true}
+ *        -> {"ok":true,"token":"<issued-ms>.<nonce>.<hmac>"}
+ *   POST api/scores.php  {"initials":"IAN","score":7,"token":"..."}
+ *        -> {"ok":true,"scores":[...],"entry":{id,i,s,t,rank}}
+ * No database: JSON files guarded by flock(). Works on PHP 7.4+.
+ *
+ * A save is only accepted with a server-issued token from {"start":true}.
+ * The token is HMAC-SHA256 over "<issued unix ms>.<nonce>", keyed with a
+ * secret created once and stored beside the score files (secret.json.php).
+ * Used nonces live in used.json.php until the token's own expiry, then get pruned.
  */
 
 // ---------------------------------------------------------------- settings
@@ -13,12 +21,18 @@
 //   2. otherwise api/data/ (blocked from the web by .htaccess, and the files start with "<?php exit;").
 // Or set an absolute path here, e.g. '/home/ian/ian-randall-scores'.
 const SCORES_DIR = '';
-const TOP_KEEP   = 100;  // entries kept on disk
-const TOP_SHOW   = 20;   // entries returned
-const MAX_SCORE  = 150;  // generous ceiling for a 15 second round; the puck respawns instantly, so fast swipers on mobile score a lot
-const MAX_BODY   = 512;  // bytes
-const RATE_MAX   = 5;    // saves allowed per IP ...
-const RATE_WINDOW = 60;  // ... per this many seconds
+const TOP_KEEP   = 100;   // entries kept on disk
+const TOP_SHOW   = 20;    // entries returned
+const MAX_SCORE  = 150;   // generous ceiling for a 15 second round; the puck respawns instantly, so fast swipers on mobile score a lot
+const MAX_BODY   = 512;   // bytes
+const RATE_MAX   = 5;     // saves allowed per IP ...
+const TOKEN_MAX  = 12;    // round-starts allowed per IP ...
+const RATE_WINDOW = 60;   // ... per this many seconds
+const ROUND_MS       = 15000;
+const EARLY_SLACK_MS = 2000;   // token fetch overlaps the start of the client clock
+const MIN_ELAPSED_MS = 13000;  // ROUND_MS - EARLY_SLACK_MS
+const TOKEN_TTL_MS   = 600000; // 10 minutes to sign the board
+const FUTURE_SLACK_MS = 5000;
 const BLOCKED = ['ASS','CUM','FAG','FCK','FUC','FUK','FKU','FUX','KKK','NIG','NGR','NGA','SEX','TIT','DIK','DIC','COK','CNT','KNT','JIZ','WTF','NAZ','SUK','SUC','XXX','VAG','CLT','POO'];
 
 // ---------------------------------------------------------------- helpers
@@ -34,6 +48,10 @@ function respond($code, $data) {
     exit;
 }
 function fail($code, $msg) { respond($code, ['ok' => false, 'error' => $msg]); }
+function give_up($lock, $code, $msg) {
+    if ($lock) flock($lock, LOCK_UN);
+    fail($code, $msg);
+}
 
 function data_dir() {
     $candidates = [];
@@ -127,6 +145,57 @@ function client_key() {
     // Real visitor IP (via Cloudflare when applicable). Stored hashed, never as a raw IP.
     return substr(hash('sha256', 'ian-randall-hockey|' . client_ip()), 0, 20);
 }
+function now_ms() { return (int) round(microtime(true) * 1000); }
+
+function secret_path($dir) { return $dir . DIRECTORY_SEPARATOR . 'secret.json.php'; }
+function used_path($dir) { return $dir . DIRECTORY_SEPARATOR . 'used.json.php'; }
+
+function load_secret($dir) {
+    $cur = read_json(secret_path($dir), []);
+    if (isset($cur['k']) && is_string($cur['k']) && preg_match('/^[a-f0-9]{64}$/', $cur['k'])) return $cur['k'];
+    return null;
+}
+// Caller holds the exclusive lock. Creates the key once; a later call returns the same one.
+function ensure_secret($dir) {
+    $k = load_secret($dir);
+    if ($k !== null) return $k;
+    $k = bin2hex(random_bytes(32));
+    if (!write_json(secret_path($dir), ['k' => $k])) return null;
+    return $k;
+}
+function sign_token($secret, $iat, $nonce) {
+    return hash_hmac('sha256', $iat . '.' . $nonce, hex2bin($secret));
+}
+function issue_token($secret) {
+    $iat = now_ms();
+    $nonce = bin2hex(random_bytes(8));
+    return $iat . '.' . $nonce . '.' . sign_token($secret, $iat, $nonce);
+}
+// Returns ['iat' => int, 'nonce' => string] or null when the token is missing, mangled, or badly signed.
+function token_parts($token, $secret) {
+    if (!is_string($token) || !preg_match('/^(\d{13})\.([a-f0-9]{16})\.([a-f0-9]{64})$/', $token, $m)) return null;
+    $sig = sign_token($secret, $m[1], $m[2]);
+    if (!hash_equals($sig, $m[3])) return null;
+    return ['iat' => (int)$m[1], 'nonce' => $m[2]];
+}
+function load_used($dir, $now) {
+    $raw = read_json(used_path($dir), []);
+    $out = [];
+    foreach ($raw as $nonce => $exp) {
+        if (!is_string($nonce) || !preg_match('/^[a-f0-9]{16}$/', $nonce)) continue;
+        if (!is_int($exp) || $exp <= $now) continue;
+        $out[$nonce] = $exp;
+    }
+    return $out;
+}
+function prune_rate($rate, $nowSec) {
+    foreach ($rate as $k => $times) {
+        $keep = [];
+        foreach ((array)$times as $t) if (is_int($t) && $t > $nowSec - RATE_WINDOW) $keep[] = $t;
+        if ($keep) $rate[$k] = $keep; else unset($rate[$k]);
+    }
+    return $rate;
+}
 
 // ---------------------------------------------------------------- request
 $method = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET';
@@ -168,44 +237,75 @@ if (strlen((string)$body) > MAX_BODY) fail(413, 'request too large');
 $req = json_decode((string)$body, true);
 if (!is_array($req)) fail(400, 'bad JSON');
 
-// validate
+$isStart = isset($req['start']) && $req['start'] === true && !isset($req['score']) && !isset($req['token']);
+
+if ($isStart) {
+    flock($lock, LOCK_EX);
+    $secret = ensure_secret($dir);
+    if ($secret === null) give_up($lock, 500, 'score storage is not writable');
+    $nowSec = time();
+    $rate = prune_rate(read_json($rateFile, []), $nowSec);
+    $tkey = 't' . client_key();
+    $mine = isset($rate[$tkey]) ? $rate[$tkey] : [];
+    if (count($mine) >= TOKEN_MAX) {
+        header('Retry-After: ' . max(1, RATE_WINDOW - ($nowSec - min($mine))));
+        give_up($lock, 429, 'too many rounds, try again in a minute');
+    }
+    $mine[] = $nowSec;
+    $rate[$tkey] = $mine;
+    if (!write_json($rateFile, $rate)) give_up($lock, 500, 'score storage is not writable');
+    $token = issue_token($secret);
+    flock($lock, LOCK_UN);
+    respond(200, ['ok' => true, 'token' => $token]);
+}
+
+// validate the score itself before spending a token
 $initials = isset($req['initials']) && is_string($req['initials']) ? strtoupper(trim($req['initials'])) : '';
 if (!preg_match('/^[A-Z]{1,3}$/', $initials)) fail(422, 'initials must be 1 to 3 letters');
 if (in_array($initials, BLOCKED, true)) fail(422, 'pick different initials');
 $score = isset($req['score']) ? $req['score'] : null;
 if (is_string($score) && preg_match('/^\d{1,3}$/', $score)) $score = (int)$score;
 if (!is_int($score) || $score < 1 || $score > MAX_SCORE) fail(422, 'score out of range');
+if (!isset($req['token']) || !is_string($req['token']) || $req['token'] === '') fail(422, 'missing round token, play again');
 
 flock($lock, LOCK_EX);
-// rate limit (per hashed IP, sliding window)
-$now = time();
-$rate = read_json($rateFile, []);
-foreach ($rate as $k => $times) {
-    $rate[$k] = array_values(array_filter((array)$times, function ($t) use ($now) { return is_int($t) && $t > $now - RATE_WINDOW; }));
-    if (!$rate[$k]) unset($rate[$k]);
-}
+$secret = ensure_secret($dir);
+if ($secret === null) give_up($lock, 500, 'score storage is not writable');
+$parts = token_parts($req['token'], $secret);
+if ($parts === null) give_up($lock, 422, 'unrecognised round, play again');
+$now = now_ms();
+if ($parts['iat'] > $now + FUTURE_SLACK_MS) give_up($lock, 422, 'unrecognised round, play again');
+if ($now - $parts['iat'] > TOKEN_TTL_MS) give_up($lock, 422, 'that round has expired, play again');
+$used = load_used($dir, $now);
+if (isset($used[$parts['nonce']])) give_up($lock, 409, 'that round was already saved');
+$elapsed = $now - $parts['iat'];
+if ($elapsed < MIN_ELAPSED_MS) give_up($lock, 422, 'round still in progress, try again in a moment');
+
+// rate limit (per hashed IP, sliding window) — only once the round itself is acceptable
+$nowSec = time();
+$rate = prune_rate(read_json($rateFile, []), $nowSec);
 $key = client_key();
 $mine = isset($rate[$key]) ? $rate[$key] : [];
 if (count($mine) >= RATE_MAX) {
-    flock($lock, LOCK_UN);
-    header('Retry-After: ' . max(1, RATE_WINDOW - ($now - min($mine))));
-    fail(429, 'too many saves, try again in a minute');
+    header('Retry-After: ' . max(1, RATE_WINDOW - ($nowSec - min($mine))));
+    give_up($lock, 429, 'too many saves, try again in a minute');
 }
-$mine[] = $now;
+$mine[] = $nowSec;
 $rate[$key] = $mine;
-write_json($rateFile, $rate);
+if (!write_json($rateFile, $rate)) give_up($lock, 500, 'could not save the score');
 
-// add the entry
+// add the entry, then burn the token so a retry cannot insert it twice
 $list = clean_list(read_json($scoresFile, []));
-$entry = ['id' => bin2hex(random_bytes(6)), 'i' => $initials, 's' => $score, 't' => (int)round(microtime(true) * 1000)];
+$entry = ['id' => bin2hex(random_bytes(6)), 'i' => $initials, 's' => $score, 't' => $now];
 $list[] = $entry;
 sort_scores($list);
 $rank = null;
 foreach ($list as $n => $e) { if ($e['id'] === $entry['id']) { $rank = $n + 1; break; } }
 $list = array_slice($list, 0, TOP_KEEP);
-$ok = write_json($scoresFile, $list);
+if (!write_json($scoresFile, $list)) give_up($lock, 500, 'could not save the score');
+$used[$parts['nonce']] = $parts['iat'] + TOKEN_TTL_MS;
+if (!write_json(used_path($dir), $used)) give_up($lock, 500, 'could not save the score');
 flock($lock, LOCK_UN);
-if (!$ok) fail(500, 'could not save the score');
 
 $entry['rank'] = $rank;
 respond(200, ['ok' => true, 'scores' => array_slice($list, 0, TOP_SHOW), 'entry' => $entry]);

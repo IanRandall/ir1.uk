@@ -33,7 +33,7 @@ That writes three things, all gitignored:
 
 Hosting is Ian's own PHP server. Upload the contents of `dist/` by hand so `index.html` sits next to `api/scores.php`. PHP 7.4+ is enough.
 
-Score files are written outside the web root when that directory is writable: a folder called `ian-randall-scores` next to the web root, created on the first save. If that is not possible they fall back to `api/data/`. To force a path, set `SCORES_DIR` near the top of `scores.php`.
+Score files are written outside the web root when that directory is writable: a folder called `ian-randall-scores` next to the web root, created on the first round. If that is not possible they fall back to `api/data/`. To force a path, set `SCORES_DIR` near the top of `scores.php`. The secret and the used-token list live in that same folder and are not part of the upload.
 
 ## Leaderboard API
 
@@ -45,14 +45,26 @@ Score files are written outside the web root when that directory is writable: a 
 
 `scores` is the top 20. `i` is initials, `s` is the score, `t` is the time in milliseconds.
 
-`POST api/scores.php` with `{"initials": "IAN", "score": 7}` adds the entry and returns the same list plus `entry` (`id`, `i`, `s`, `t`, `rank`).
+`POST api/scores.php` with `{"start": true}` is what the page sends when the air-hockey clock starts. The response is a single-use round token:
+
+```json
+{"ok": true, "token": "1730000000000.0123abcd0123abcd.<hmac sha256 hex>"}
+```
+
+The token is `<issued unix milliseconds>.<16 hex nonce>.<hmac>`. It is signed with a secret created on first use and stored next to the score files (`secret.json.php`). Leave that file in place; deleting it only invalidates rounds that have not been saved yet.
+
+`POST api/scores.php` with `{"initials": "IAN", "score": 7, "token": "<token>"}` adds the entry and returns the same list plus `entry` (`id`, `i`, `s`, `t`, `rank`).
+
+If the page cannot fetch a token (the `file://` preview, or the server is down), the score is kept on that device and the page says so. A token the server rejects is shown in the status line under the board; it is not quietly stored on the device instead.
 
 Protections:
 
 - Same-origin only. There is no `Access-Control-Allow-Origin` header. If `Origin` is sent, its host must match `Host`. If `Sec-Fetch-Site` is sent, it must be `same-origin` or `none`. The body must be `Content-Type: application/json` and at most 512 bytes.
 - Initials are 1–3 letters, checked against a small block list. Scores are integers from 1 to 150.
-- Five saves per IP address per minute. The address is stored only as a short hash, for the rate limit.
-- `flock` covers the score file and the rate-limit file. Each write goes to a temporary file and is renamed into place. The files (`scores.json.php`, `ratelimit.json.php`) start with `<?php exit;` so they are not readable as data even where `.htaccess` is ignored.
+- A save without the round token, or with a token that is altered, unknown, expired (10 minutes), or already used, is rejected. Used nonces are kept in `used.json.php` and pruned once they expire.
+- A save earlier than 13 seconds after the token was issued is rejected. A round lasts 15 seconds; the 2 second gap covers the token request overlapping the start of the clock.
+- Five saves per IP address per minute, and twelve round-starts. The address is stored only as a short hash, for the rate limit. A save that is rejected for the token or the score does not use up a save.
+- `flock` covers the score file, the rate-limit file, and the used-token file. Each write goes to a temporary file and is renamed into place. The files (`scores.json.php`, `ratelimit.json.php`, `secret.json.php`, `used.json.php`) start with `<?php exit;` so they are not readable as data even where `.htaccess` is ignored.
 
 The site sits behind Cloudflare. `CF-Connecting-IP` is taken as the visitor address only when the connection itself comes from [Cloudflare's published IP ranges](https://www.cloudflare.com/ips/). A request that merely adds the header is rated against the connection address instead.
 
